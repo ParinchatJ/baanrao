@@ -47,6 +47,7 @@ async function supaDb(houseKey) {
     auth: { persistSession: false },
   });
   const ok = ({ data, error }) => { if (error) throw error; return data; };
+  const T = (t) => (t === 'items' ? 'items_all' : t);
   return {
     async check() {
       const { data, error } = await sb.rpc('house_ok');
@@ -56,15 +57,15 @@ async function supaDb(houseKey) {
     async all() {
       const out = {};
       await Promise.all(TABLES.map(async t => {
-        let q = sb.from(t).select('*');
+        let q = sb.from(T(t)).select('*');
         if (t === 'logs') q = q.order('at', { ascending: false }).limit(400);
         out[t] = ok(await q);
       }));
       return out;
     },
-    async insert(t, row) { return ok(await sb.from(t).insert(row).select().single()); },
-    async update(t, id, patch) { return ok(await sb.from(t).update(patch).eq('id', id).select().single()); },
-    async remove(t, id) { ok(await sb.from(t).delete().eq('id', id)); },
+    async insert(t, row) { return ok(await sb.from(T(t)).insert(row).select().single()); },
+    async update(t, id, patch) { return ok(await sb.from(T(t)).update(patch).eq('id', id).select().single()); },
+    async remove(t, id) { ok(await sb.from(T(t)).delete().eq('id', id)); },
     async setSetting(key, value) { ok(await sb.from('settings').upsert({ key, value })); },
     async saveSub(sub, who) { ok(await sb.from('push_subs').upsert({ endpoint: sub.endpoint, sub, who })); },
   };

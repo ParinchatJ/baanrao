@@ -34,7 +34,7 @@ const app = document.getElementById('app');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (n) => (n === null || n === undefined || n === '' ? '฿ —' : '฿' + Number(n).toLocaleString('th-TH', { maximumFractionDigits: 2 }));
 const today = () => D.todayBKK();
-const byId = (t, id) => S.data[t].find(x => x.id === id);
+const byId = (t, id) => (t === 'items' ? S.allItems || S.data.items : S.data[t]).find(x => x.id === id);
 const setting = (k) => (S.data.settings.find(s => s.key === k) || {}).value;
 function toast(msg) {
   const t = document.getElementById('toast');
@@ -149,7 +149,26 @@ function monthBills(filter = () => true) {
 }
 
 // ---------- data ----------
-async function reload() { S.data = await S.db.all(); }
+function doneInfo(it) {
+  if (it.closed_at) return 'ปิดรายการแล้ว';
+  if (it.type === 'ins' && due(it).expired) return 'หมดประกันแล้ว (ปิดอัตโนมัติ)';
+  if (it.type === 'bill' && it.recur === 'once' && it.last_done) return 'จ่ายครบแล้ว (ปิดอัตโนมัติ)';
+  return '';
+}
+async function reload() {
+  S.data = await S.db.all();
+  S.allItems = S.data.items;
+  S.doneItems = S.allItems.filter(i => doneInfo(i));
+  S.data.items = S.allItems.filter(i => !doneInfo(i));
+}
+function doneSection(pred) {
+  const list = (S.doneItems || []).filter(pred);
+  if (!list.length) return '';
+  return `<details class="panel" style="overflow:hidden;background:#F3EDE2">
+    <summary class="row" style="cursor:pointer;font-weight:700;list-style:none;border-top:none">✓ เสร็จแล้ว (${list.length}) <span class="muted" style="margin-left:auto">แตะเพื่อดู</span></summary>
+    ${list.map(it => `<a class="row" href="#/item/${it.id}" style="opacity:.75"><span class="ibox" style="width:36px;height:36px;background:${TYPES[it.type].c}">${px(TYPES[it.type].icon, 2)}</span><div class="col"><span style="font-size:14px;font-weight:700;text-decoration:line-through">${esc(it.title)}</span><span class="muted">${esc(doneInfo(it))}</span></div></a>`).join('')}
+  </details>`;
+}
 async function log(row) { try { await S.db.insert('logs', { who: S.who, ...row }); } catch (e) { console.warn(e); } }
 async function notifyOther(title, body) { try { await callFn('notify', S.key, { from: S.who, title, body }); } catch (e) { console.warn(e); } }
 
@@ -229,6 +248,7 @@ function viewFloor(f) {
   if (f === 'house') {
     body = groupByType(S.data.items.filter(i => i.place === 'house'), 'ยังไม่มีรายการของทั้งบ้าน');
     body += `<a class="btn ghost" href="#/add?place=house" style="min-height:56px">+ เพิ่มรายการของทั้งบ้าน</a>`;
+    body += doneSection(i => i.place === 'house');
   } else {
     const rooms = S.data.rooms.filter(r => r.floor === f).sort((a, b) => (a.sort || 0) - (b.sort || 0) || String(a.created_at).localeCompare(b.created_at));
     body = rooms.map(r => {
@@ -243,6 +263,7 @@ function viewFloor(f) {
     const loose = S.data.items.filter(i => i.place === f && !i.room_id);
     if (loose.length) body += `<h2 class="h" style="margin-top:6px">ทั่วทั้ง${F.name}</h2>` + groupByType(loose);
     body += S.ui.addRoom ? roomForm(f) : `<button class="btn ghost" data-act="showAddRoom" style="min-height:60px">+ เพิ่มห้องใน${F.name}</button>`;
+    body += doneSection(i => i.place === f && !i.room_id);
   }
   return `<div class="page">
     ${backbar('#/', F.name)}
@@ -268,6 +289,7 @@ function viewRoom(id) {
     <span class="tag" style="align-self:flex-start;font-size:12px">${px('pin', 2)}${esc(FLOORS[r.floor].name)} › ${esc(r.name)}</span>
     ${S.ui.editRoom ? roomForm(r.floor, r) : ''}
     ${groupByType(its, 'ยังไม่มีรายการในห้องนี้ กด + มุมขวาบนเพื่อเพิ่ม')}
+    ${doneSection(i => i.room_id === id)}
     <div class="grid2"><button class="btn" data-act="editRoom">แก้ชื่อ / ไอคอน</button><button class="btn" data-act="delRoom" data-id="${r.id}">ลบห้อง</button></div>
   </div>`;
 }
@@ -309,7 +331,7 @@ function detailRows(it, n) {
   return rows.map(([k, v]) => `<div class="row" style="justify-content:space-between;gap:16px;font-size:14px"><span>${esc(k)}</span><span style="font-weight:700;text-align:right;overflow-wrap:anywhere">${esc(v)}</span></div>`).join('');
 }
 function logRows(logs) {
-  const KIND = { paid: 'จ่ายแล้ว', done: 'ทำแล้ว', deposit: 'หยอดเงิน', created: 'เพิ่มรายการ', vet: 'หาหมอ', weight: 'ชั่งน้ำหนัก', edit: 'แก้ไข' };
+  const KIND = { closed: 'ปิดรายการ (เสร็จแล้ว)', reopened: 'เปิดรายการอีกครั้ง', paid: 'จ่ายแล้ว', done: 'ทำแล้ว', deposit: 'หยอดเงิน', created: 'เพิ่มรายการ', vet: 'หาหมอ', weight: 'ชั่งน้ำหนัก', edit: 'แก้ไข' };
   if (!logs.length) return '<div class="empty">ยังไม่มีประวัติ</div>';
   return logs.slice(0, 30).map(l => {
     const d = new Date(l.at);
@@ -327,8 +349,11 @@ function viewItem(id) {
   if (it.type === 'mnt') action = `<button class="btn big" data-act="done" data-id="${it.id}" style="background:#FFAD33">ทำแล้ววันนี้</button>`;
   if (it.type === 'sav') action = `<button class="btn big" data-act="deposit" data-id="${it.id}" style="background:#F6B7C3">หยอดเงิน</button>`;
   const logs = S.data.logs.filter(l => l.item_id === id).sort((a, b) => String(b.at).localeCompare(a.at));
+  const done = doneInfo(it);
+  if (done) action = '';
   return `<div class="page">
     ${backbar(back, it.title, `<a class="btn sm" href="#/edit/${it.id}">แก้ไข</a>`)}
+    ${done ? `<section class="panel" style="padding:14px;background:#6BAA75;display:flex;flex-direction:column;gap:10px"><span class="h" style="font-size:18px">✓ ${esc(done)}</span>${it.closed_at ? `<span class="muted">เมื่อ ${esc(new Date(it.closed_at).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }))} · ไม่แจ้งเตือนแล้ว</span><button class="btn sm" data-act="reopen" data-id="${it.id}">เปิดรายการอีกครั้ง</button>` : '<span class="muted">ไม่แจ้งเตือนแล้ว ถ้าต่ออายุ กดแก้ไขแล้วใส่วันใหม่</span>'}</section>` : ''}
     <div style="display:flex;align-items:center;gap:14px">
       <span class="ibox" style="width:72px;height:72px;background:${TYPES[it.type].c}">${px(TYPES[it.type].icon, 4)}</span>
       <div class="col" style="gap:6px"><span class="tag" style="font-size:12px;align-self:flex-start">${px('pin', 2)}${esc(placeLabel(it))}</span><div>${tag(it.type)}</div></div>
@@ -341,7 +366,8 @@ function viewItem(id) {
     <section class="panel" style="overflow:hidden">${detailRows(it, n) || '<div class="empty">—</div>'}</section>
     ${it.note ? `<section class="panel" style="padding:14px;display:flex;gap:10px;background:#FFEC89">${px('note', 3)}<p style="margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap">${esc(it.note)}</p></section>` : ''}
     <section style="display:flex;flex-direction:column;gap:10px"><h2 class="h" style="font-size:16px">ประวัติ</h2><div class="panel" style="overflow:hidden">${logRows(logs)}</div></section>
-    <button class="btn" data-act="delItem" data-id="${it.id}">ลบรายการนี้</button>
+    ${done ? '' : `<button class="btn big" data-act="close" data-id="${it.id}" style="background:#6BAA75">✓ เสร็จแล้ว ปิดรายการ</button>`}
+    <button class="btn" data-act="delItem" data-id="${it.id}" style="color:#CC1400">ลบรายการนี้ทิ้ง</button>
   </div>`;
 }
 
@@ -522,6 +548,7 @@ function viewCats() {
       <span class="px" style="font-size:11px">${mb.paid}/${mb.count} PAID</span></div>
     </section>
     ${groupByType(its, 'ยังไม่มีรายการของแมว กด + มุมขวาบนเพื่อเพิ่ม เช่น อาหาร ทราย วัคซีน')}
+    ${doneSection(i => i.place === 'cat')}
   </div>`;
 }
 
@@ -693,6 +720,22 @@ app.addEventListener('click', async (e) => {
         await log({ item_id: it.id, kind: 'deposit', amount: v });
         await reload(); render(); toast('หยอดแล้ว ' + money(v));
         notifyOther(`${S.who} หยอดเงิน ${it.title}`, money(v));
+        break;
+      }
+      case 'close': {
+        const it = byId('items', d.id);
+        if (!confirm(`ปิดรายการ "${it.title}"? จะย้ายไปอยู่ส่วน "เสร็จแล้ว" และไม่แจ้งเตือนอีก`)) return;
+        await S.db.update('items', it.id, { closed_at: new Date().toISOString() });
+        await log({ item_id: it.id, kind: 'closed' });
+        await reload(); render(); toast('ปิดรายการแล้ว ✓');
+        notifyOther(`${S.who} ปิดรายการ ${it.title} แล้ว`, 'เสร็จเรียบร้อย ✓');
+        break;
+      }
+      case 'reopen': {
+        const it = byId('items', d.id);
+        await S.db.update('items', it.id, { closed_at: null });
+        await log({ item_id: it.id, kind: 'reopened' });
+        await reload(); render(); toast('เปิดรายการอีกครั้งแล้ว');
         break;
       }
       case 'delItem': {
